@@ -4,3 +4,6 @@
 - Ahmad Wahab (PID Algorithm)
 - Peter Xie ()
 - Zhiyuan Liu ()
+
+## Planning
+- Week 1: Assembling, Balancing, Web UI
