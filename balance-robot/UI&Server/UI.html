@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Responsive Robot Control UI</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #f0f0f0;
+      touch-action: none;
+      user-select: none;
+      font-family: sans-serif;
+    }
+    #gameArea {
+      position: relative;
+      width: 100vw; height: 100vh;
+    }
+    /* Info panel */
+    #infoPanel {
+      position: absolute;
+      top: 2vmin; left: 2vmin;
+      background: rgba(255,255,255,0.85);
+      padding: 1.5vmin 2vmin;
+      border-radius: 1vmin;
+      box-shadow: 0 0.5vmin 1.5vmin rgba(0,0,0,0.2);
+      z-index: 10;
+      font-size: 2.5vmin;
+    }
+    #infoPanel p { margin: 1vmin 0; }
+    /* Robot selector */
+    #robotSelector {
+      position: absolute;
+      top: 2vmin; right: 2vmin;
+      z-index: 10;
+      text-align: right;
+      font-size: 2.5vmin;
+    }
+    #toggleSelector {
+      background: #007bff;
+      color: white;
+      border: none;
+      padding: 1.5vmin 2vmin;
+      border-radius: 1vmin;
+      cursor: pointer;
+    }
+    #selectorOptions {
+      display: none;
+      margin-top: 1vmin;
+      background: rgba(255,255,255,0.9);
+      padding: 2vmin;
+      border-radius: 1vmin;
+      box-shadow: 0 0.5vmin 1.5vmin rgba(0,0,0,0.2);
+      text-align: left;
+    }
+    #selectorOptions label {
+      display: block;
+      margin-bottom: 1.5vmin;
+      cursor: pointer;
+    }
+    /* Camera feed placeholder */
+    #cameraFeed {
+      position: absolute;
+      top: 20vh; left: 20vw;
+      width: 60vw; height: 60vh;
+      border: 0.5vmin dashed #666;
+      border-radius: 1vmin;
+      background: #ddd;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-size: 3vmin;
+      z-index: 5;
+    }
+    /* Player box */
+    #player {
+      position: absolute;
+      width: 10vmin; height: 10vmin;
+      background: #007bff;
+      top: calc(50% - 5vmin);
+      left: calc(50% - 5vmin);
+      z-index: 6; /* above cameraFeed */
+    }
+    /* Joystick zone */
+    #joystick {
+      position: absolute;
+      bottom: 5vmin; left: 5vmin;
+      touch-action: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameArea">
+    <div id="infoPanel">
+      <p>Battery: <span id="battery">85%</span></p>
+      <p>PID → P: <span id="pidP">1.2</span>, I: <span id="pidI">0.05</span>, D: <span id="pidD">0.01</span></p>
+    </div>
+
+    <div id="robotSelector">
+      <button id="toggleSelector">Robot 1 (offline) ▾</button>
+      <div id="selectorOptions">
+        <label>
+          <input type="radio" name="robot" value="1" checked>
+          Robot 1 (<span id="status1">offline</span>)
+        </label>
+        <label>
+          <input type="radio" name="robot" value="2">
+          Robot 2 (<span id="status2">offline</span>)
+        </label>
+      </div>
+    </div>
+
+    <div id="cameraFeed">Camera Feed</div>
+    <div id="player"></div>
+    <div id="joystick"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.9.0/dist/nipplejs.min.js"></script>
+  <script>
+    // Responsive joystick sizing
+    const joystickEl = document.getElementById('joystick');
+    const base = Math.min(window.innerWidth, window.innerHeight);
+    const joySize = Math.round(base * 0.25);
+    joystickEl.style.width = joySize + 'px';
+    joystickEl.style.height = joySize + 'px';
+
+    // Robot selector logic
+    const toggleBtn = document.getElementById('toggleSelector');
+    const options   = document.getElementById('selectorOptions');
+    function updateToggleText() {
+      const sel = document.querySelector('input[name="robot"]:checked');
+      toggleBtn.textContent = sel.parentNode.textContent.trim() + ' ▾';
+    }
+    toggleBtn.addEventListener('click', () => {
+      options.style.display = options.style.display === 'block' ? 'none' : 'block';
+    });
+    document.querySelectorAll('input[name="robot"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        updateToggleText();
+        // TODO: send selection downstream
+      });
+    });
+    updateToggleText();
+
+    // Movement & joystick code
+    const player = document.getElementById('player');
+    const speed  = base * 0.3; // px/sec
+    let lastTime = performance.now();
+
+    // Keyboard state
+    const keys = { up: false, down: false, left: false, right: false };
+    document.addEventListener('keydown', e => {
+      switch (e.key) {
+        case 'w': case 'W': case 'ArrowUp':    keys.up    = true; break;
+        case 's': case 'S': case 'ArrowDown':  keys.down  = true; break;
+        case 'a': case 'A': case 'ArrowLeft':  keys.left  = true; break;
+        case 'd': case 'D': case 'ArrowRight': keys.right = true; break;
+      }
+    });
+    document.addEventListener('keyup', e => {
+      switch (e.key) {
+        case 'w': case 'W': case 'ArrowUp':    keys.up    = false; break;
+        case 's': case 'S': case 'ArrowDown':  keys.down  = false; break;
+        case 'a': case 'A': case 'ArrowLeft':  keys.left  = false; break;
+        case 'd': case 'D': case 'ArrowRight': keys.right = false; break;
+      }
+    });
+
+    // Initialize analog joystick vector
+    let joyVector = { x: 0, y: 0 };
+    const joystick = nipplejs.create({
+      zone: joystickEl,
+      mode: 'static',
+      position: { left: joySize/2 + 'px', bottom: joySize/2 + 'px' },
+      size: joySize,
+      color: '#007bff',
+      threshold: 0.1
+    });
+    joystick.on('move', (evt, data) => {
+      if (!data || !data.angle || !data.force) return;
+      const ang = data.angle.radian;
+      const f   = data.force;  // 0…1
+      joyVector.x = Math.cos(ang) * f;
+      joyVector.y = -Math.sin(ang) * f;
+    });
+    joystick.on('end', () => {
+      joyVector.x = 0; joyVector.y = 0;
+    });
+
+    // Main update loop
+    function update(now) {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+
+      const style = getComputedStyle(player);
+      let x = parseFloat(style.left), y = parseFloat(style.top);
+      let dx = 0, dy = 0;
+
+      // If joystick active, use joyVector; otherwise use keys
+      if (joyVector.x !== 0 || joyVector.y !== 0) {
+        dx = joyVector.x;
+        dy = joyVector.y;
+      } else {
+        if (keys.up)    dy -= 1;
+        if (keys.down)  dy += 1;
+        if (keys.left)  dx -= 1;
+        if (keys.right) dx += 1;
+      }
+
+      // Normalize for diagonal
+      if (dx !== 0 || dy !== 0) {
+        const len = Math.hypot(dx, dy);
+        dx /= len; dy /= len;
+      }
+
+      // Apply movement
+      x = Math.min(Math.max(0, x + dx * speed * dt), window.innerWidth  - player.clientWidth);
+      y = Math.min(Math.max(0, y + dy * speed * dt), window.innerHeight - player.clientHeight);
+
+      player.style.left = x + 'px';
+      player.style.top  = y + 'px';
+
+      requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
+
+    // On resize/orientation change, reload to recalc sizes
+    window.addEventListener('resize', () => { location.reload(); });
+  </script>
+</body>
+</html>
