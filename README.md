@@ -7,3 +7,6 @@
 
 ## Planning
 - Week 1: Assembling, Balancing, Web UI
+
+## Report
+- https://www.overleaf.com/project/68304f3eeaf062e40b912caf
