@@ -121,6 +121,16 @@
     #btnBackward { grid-area: down;  }
     #btnLeft     { grid-area: left;  }
     #btnRight    { grid-area: right; }
+    
+    .rotate-90, .rotate-270 {
+      display: inline-block;    /* make transform apply just to the icon */
+    }
+    .rotate-90 {
+      transform: rotate(90deg);
+    }
+    .rotate-270 {
+      transform: rotate(270deg); /* or rotate(-90deg) */
+    }
   </style>
 </head>
 <body>
@@ -149,8 +159,12 @@
 
     <div id="controls">
       <button class="ctrl-btn" id="btnForward">▲</button>
-      <button class="ctrl-btn" id="btnLeft">↺</button>
-      <button class="ctrl-btn" id="btnRight">↻</button>
+      <button class="ctrl-btn" id="btnLeft">
+        <span class="rotate-90">↶</span>
+      </button>
+      <button class="ctrl-btn" id="btnRight">
+        <span class="rotate-270">↷</span>
+      </button>
       <button class="ctrl-btn" id="btnBackward">▼</button>
     </div>
   </div>
