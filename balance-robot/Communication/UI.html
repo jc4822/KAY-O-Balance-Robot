@@ -52,110 +52,83 @@
   </div>
 
   <script>
-    // ─── Configuration ────────────────────────────────────────────────────────────
-    const PI_IP = "192.168.178.185";   // ← put your Pi’s LAN IP here
-    const SIGNALING_URL = `http://${PI_IP}:8000/offer`;
-    const PEER_ID = "browser1";        // a unique ID for this browser instance
-    // ─────────────────────────────────────────────────────────────────────────────
+  // ───────────── Configuration ─────────────────────────────────────────────────
+  // Fetch and signal back to whatever host served this page (the Pi).
+  // We bind to port 8000 (your pi_peer.py HTTP server).
+  const SIGNALING_BASE = `http://${window.location.hostname}:8000`;
 
-    let pc = null;
-    let dataChannel = null;
+  // You can remove any `PI_IP` or `SIGNALING_URL` definitions—just use SIGNALING_BASE.
+  // ────────────────────────────────────────────────────────────────────────────────
 
-    async function startWebRTC() {
-      // 1a) Create RTCPeerConnection
-      pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  let pc = null;
+  let dataChannel = null;
+
+  async function startWebRTC() {
+    // 1) Create the RTCPeerConnection, DataChannel, etc.
+    pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
+    dataChannel = pc.createDataChannel("control", { ordered: true });
+    dataChannel.onopen = () => { };
+    dataChannel.onmessage = (evt) => { };
+    dataChannel.onclose = () => { };
+
+    pc.ontrack = (ev) => { };
+
+    // 2) Create an SDP offer and wait for ICE to finish gathering:
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise(resolve => {
+      if (pc.iceGatheringState === "complete") {
+        resolve();
+      } else {
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.onicegatheringstatechange = null;
+            resolve();
+          }
+        };
+      }
+    });
+
+    // 3) Post the *complete* SDP to /offer on port 8000 of the same host:
+    let resp;
+    try {
+      resp = await fetch(`${SIGNALING_BASE}/offer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          peer_id: "browser1",
+          type:    pc.localDescription.type,
+          sdp:     pc.localDescription.sdp
+        })
       });
-
-      // 1b) Create our DataChannel “control” immediately
-      dataChannel = pc.createDataChannel("control", { ordered: true });
-      dataChannel.onopen = () => {
-        console.log("DataChannel open (browser→pi)");
-        document.querySelector('input[name="robot"]:checked')
-                .parentNode.querySelector('span').textContent = "online";
-      };
-      dataChannel.onmessage = (evt) => {
-        const telemetry = JSON.parse(evt.data);
-        document.getElementById("battery").textContent = telemetry.battery + "%";
-        document.getElementById("pidP").textContent    = telemetry.pidP;
-        document.getElementById("pidI").textContent    = telemetry.pidI;
-        document.getElementById("pidD").textContent    = telemetry.pidD;
-      };
-      dataChannel.onclose = () => {
-        console.log("DataChannel closed");
-        document.querySelector('input[name="robot"]:checked')
-                .parentNode.querySelector('span').textContent = "offline";
-      };
-
-      // 1c) If Pi later adds a video track in its answer, receive it here
-      pc.ontrack = (ev) => {
-        const video = document.getElementById("videoStream");
-        if (!video.srcObject) {
-          video.srcObject = ev.streams[0];
-        }
-      };
-
-      // 1d) Create an “offer” but wait until ICE gathering is finished
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      // Wait for ICE gathering to complete (so all candidates appear in SDP)
-      await new Promise(resolve => {
-        if (pc.iceGatheringState === "complete") {
-          resolve();
-        } else {
-          pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === "complete") {
-              pc.onicegatheringstatechange = null;
-              resolve();
-            }
-          };
-        }
-      });
-
-      // 1e) Now send the COMPLETE SDP (including all a=candidate lines) to the Pi
-      let resp;
-      try {
-        resp = await fetch(SIGNALING_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            peer_id: PEER_ID,
-            type:    pc.localDescription.type,
-            sdp:     pc.localDescription.sdp
-          })
-        });
-      } catch (networkErr) {
-        console.error("Network error when calling /offer:", networkErr);
-        return;
-      }
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error("Offer failed", resp.status, text);
-        return;
-      }
-
-      // 1f) Parse the Pi’s answer SDP (which also contains all its candidates)
-      let answer;
-      try {
-        answer = await resp.json();
-      } catch (jsonErr) {
-        console.error("Failed to parse JSON from /offer:", jsonErr);
-        return;
-      }
-
-      // 1g) Set the remote description (the Pi’s answer, with candidates)
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-
-      console.log("WebRTC connection established");
-      // Now the DataChannel “control” is open, so UI can send JSON → Pi
+    } catch (networkError) {
+      console.error("Network error when calling /offer:", networkError);
+      return;
     }
 
-    // Kick off WebRTC as soon as the page loads
-    window.addEventListener("load", () => {
-      startWebRTC().catch(e => console.error("startWebRTC() threw:", e));
-    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      console.error("Offer failed", resp.status, text);
+      return;
+    }
+
+    let answer;
+    try {
+      answer = await resp.json();
+    } catch (jsonError) {
+      console.error("Failed to parse JSON from /offer:", jsonError);
+      return;
+    }
+
+    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    console.log("WebRTC connection established");
+  }
+
+  window.addEventListener("load", () => {
+    startWebRTC().catch(e => console.error("startWebRTC() threw:", e));
+  });
 
     // ─── Robot selector & control code (unchanged from your last working UI) ────
     const toggleBtn = document.getElementById('toggleSelector');
