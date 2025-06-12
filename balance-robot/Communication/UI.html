@@ -183,12 +183,11 @@
     let sensorData = {}; 
 
     const SIGNALING_BASE = `http://${window.location.hostname}:8000`;
-    // ────────────────────────────────────────────────────────────────────────────
 
     let pc = null;
     let dataChannel = null;
 
-    // ─── 1) Define sendControl() globally ───────────────────────────────────────
+    // 1) Define sendControl() globally
     function sendControl(direction) {
       if (dataChannel && dataChannel.readyState === "open") {
         const msg = {
@@ -203,9 +202,7 @@
         console.warn("Cannot sendControl; dataChannel not open");
       }
     }
-    // ────────────────────────────────────────────────────────────────────────────
-
-    // ─── 2) Set up WebRTC / DataChannel ─────────────────────────────────────────
+    // 2) Set up WebRTC / DataChannel
     async function startWebRTC() {
       pc = new RTCPeerConnection({
         iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
@@ -537,7 +534,7 @@
       });
     });
 
-    // ─── 3) Attach keydown/keyup listeners ──────────────────────────────────────
+    // 3) Attach keydown/keyup listeners
     console.log("Attaching keydown/keyup listeners");
     document.addEventListener('keydown', e => {
       switch (e.key.toLowerCase()) {
@@ -557,9 +554,8 @@
           break;
       }
     });
-    // ────────────────────────────────────────────────────────────────────────────
 
-    // ─── 4) Attach on-screen button listeners ─────────────────────────────────
+    // 4) Attach on-screen button listeners 
     function bindBtn(id, dirName) {
       const btn = document.getElementById(id);
       console.log(`Binding pointerdown for ${id} → ${dirName}`);
@@ -580,9 +576,8 @@
     bindBtn('btnBackward', 'backward');
     bindBtn('btnLeft',     'left');
     bindBtn('btnRight',    'right');
-    // ────────────────────────────────────────────────────────────────────────────
 
-    // ─── 5) Robot selector dropdown logic ──────────────────────────────────────
+    // 5) Robot selector dropdown logic
     const toggleBtn = document.getElementById('toggleSelector');
     const opts      = document.getElementById('selectorOptions');
     function updateToggle() {
@@ -596,7 +591,6 @@
       r.addEventListener('change', () => updateToggle());
     });
     updateToggle();
-    // ────────────────────────────────────────────────────────────────────────────
   </script>
 </body>
 </html>

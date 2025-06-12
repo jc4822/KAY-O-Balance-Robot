@@ -16,7 +16,6 @@ from aiortc import (
 )
 from av import VideoFrame   # import from PyAV
 
-# ─── Configuration ──────────────────────────────────────────────────────────────
 ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"])
 ]
@@ -25,14 +24,10 @@ SIGNALING_PORT = 8000
 # ESP32 serial settings
 ESP32_SERIAL_PORT = "/dev/ttyUSB0"
 ESP32_BAUDRATE    = 115200
-# ────────────────────────────────────────────────────────────────────────────────
 
-# Globals
 pcs = set()                      # track active PeerConnections
 esp32_serial = None              # will be set to serial.Serial()
 
-
-# ────────────────────────────────────────────────────────────────────────────────
 class LibcameraH264Track(VideoStreamTrack):
     """
     A VideoStreamTrack that runs `libcamera-vid` as a subprocess in H.264 mode,
@@ -42,7 +37,6 @@ class LibcameraH264Track(VideoStreamTrack):
     def __init__(self, width=640, height=480, fps=15):
         super().__init__()  # initialize base class
 
-        # Build the libcamera-vid command. "-t 0" = run indefinitely, "--inline" embeds SPS/PPS in each frame.
         cmd = [
             "libcamera-vid",
             "-t", "0",
@@ -66,13 +60,6 @@ class LibcameraH264Track(VideoStreamTrack):
         self.frame_iterator = self.container.decode(video=0)
 
     async def recv(self):
-        """
-        Called by aiortc whenever the next frame is needed.
-        We:
-          1) await next_timestamp() → (pts, time_base)
-          2) next(self.frame_iterator) → av.VideoFrame
-          3) convert to an aiortc.VideoFrame and return
-        """
         pts, time_base = await self.next_timestamp()
 
         av_frame = next(self.frame_iterator, None)
@@ -95,9 +82,6 @@ class LibcameraH264Track(VideoStreamTrack):
         return video_frame
 
     def stop(self):
-        """
-        If aiortc stops this track, kill the subprocess and close the container.
-        """
         try:
             if self.proc:
                 self.proc.kill()
@@ -110,8 +94,6 @@ class LibcameraH264Track(VideoStreamTrack):
             pass
         super().stop()
 
-
-# ────────────────────────────────────────────────────────────────────────────────
 # CORS middleware (allow UI on :8080 to POST to :8000)
 @web.middleware
 async def cors_middleware(request, handler):
@@ -125,9 +107,7 @@ async def cors_middleware(request, handler):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# POST /offer (no‐trickle ICE)
+# POST /offer
 async def offer(request):
     try:
         params     = await request.json()
@@ -209,18 +189,13 @@ async def offer(request):
             text="Server exception in /offer: " + str(e)
         )
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Optional: GET / (health‐check)
 async def index(request):
     return web.Response(
         text="<h1>WebRTC PI + ESP32 + libcamera-vid (addTrack after recvonly)</h1>",
         content_type="text/html"
     )
 
-
-# ────────────────────────────────────────────────────────────────────────────────
-# Main: open ESP32 serial, then start aiohttp server
+# Main: open ESP32 serial
 async def main():
     global esp32_serial
     try:
