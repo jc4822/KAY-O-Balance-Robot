@@ -1,21 +1,46 @@
+# server.py  –  FastAPI + DynamoDB log (KAY-O)  ▓▓▓  WITH DEMO DATA  ▓▓▓
+# ──────────────────────────────────────────────────────────────────────────
+# Endpoints
+#   POST /log         -> write one row  (battery, mode, action)
+#   GET  /latest      -> newest row
+#   GET  /history     -> last N rows    (default 20)
+#
+# The table is created automatically and, if currently empty, seeded with
+# five example rows so you can see something immediately in Swagger UI or
+# the AWS console.
+#
+# Run:
+#   uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+# --------------------------------------------------------------------------
+
 from __future__ import annotations
-import os, time, json
+
+import os, time
 from decimal import Decimal
 from enum import Enum
+from typing import Any, List
+
 import boto3
-from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
-# ─────────────────────────── configurable constants ────────────────────────────
+# ────────────────── CONFIG ──────────────────
+ROBOT_ID   = "KAY-O"                             # <- fixed robot name
 TABLE_NAME = os.getenv("ROBOTLOG_TABLE", "RobotLogs")
-REGION     = os.getenv("AWS_REGION",     "eu-west-2")   # London
-TTL_DAYS   = int(os.getenv("TTL_DAYS",   30))           # item expiry
+REGION     = os.getenv("AWS_REGION", "eu-west-2")
+TTL_DAYS   = int(os.getenv("TTL_DAYS", 30))
+ENDPOINT   = os.getenv("DDB_ENDPOINT_URL")       # set for DynamoDB Local
 
-dynamodb = boto3.resource("dynamodb", region_name=REGION)
-client   = boto3.client("dynamodb",   region_name=REGION)
+ddb_kwargs: dict[str, Any] = {"region_name": REGION}
+if ENDPOINT:
+    ddb_kwargs["endpoint_url"] = ENDPOINT
+dynamodb = boto3.resource("dynamodb", **ddb_kwargs)
+client   = boto3.client("dynamodb",  **ddb_kwargs)
 
-# ──────────────────────────────── ENUMS & CONSTANTS ────────────────────────────
-class Motion(str, Enum):
+# ───────────── ENUM & CONSTANTS ─────────────
+class Action(str, Enum):
     FORWARD  = "FORWARD"
     BACKWARD = "BACKWARD"
     LEFT     = "LEFT"
@@ -24,23 +49,23 @@ class Motion(str, Enum):
 
 VALID_MODES = {"AUTO", "MANUAL"}
 
-# ──────────────────────── TABLE CREATION / BOOTSTRAP ───────────────────────────
+# ──────────── TABLE MANAGEMENT ──────────────
 def create_table_if_missing() -> None:
-    """Create the RobotLogs table if absent (PK: RobotId, SK: LogTS)."""
+    """Create RobotLogs (PK: RobotId, SK: LogTS) & turn on TTL."""
     try:
-        dynamodb.Table(TABLE_NAME).load()      # already exists
+        dynamodb.Table(TABLE_NAME).load()
         return
     except client.exceptions.ResourceNotFoundException:
         tbl = dynamodb.create_table(
             TableName=TABLE_NAME,
             BillingMode="PAY_PER_REQUEST",
             KeySchema=[
-                {"AttributeName": "RobotId", "KeyType": "HASH"},   # PK
-                {"AttributeName": "LogTS",  "KeyType": "RANGE"},   # SK
+                {"AttributeName": "RobotId", "KeyType": "HASH"},
+                {"AttributeName": "LogTS",  "KeyType": "RANGE"},
             ],
             AttributeDefinitions=[
                 {"AttributeName": "RobotId", "AttributeType": "S"},
-                {"AttributeName": "LogTS",  "AttributeType": "N"},
+                {"AttributeName": "LogTS",   "AttributeType": "N"},
             ],
         )
         tbl.wait_until_exists()
@@ -48,143 +73,133 @@ def create_table_if_missing() -> None:
             TableName=TABLE_NAME,
             TimeToLiveSpecification={"Enabled": True, "AttributeName": "TTL"},
         )
-        print(f"✓ Created {TABLE_NAME} with TTL enabled.")
+        print(f"✓ Created {TABLE_NAME} (TTL enabled)")
 
-# ──────────────────────────────── INTERNAL HELPERS ─────────────────────────────
-def _epoch() -> int:
-    return int(time.time())
+# ───────────── LOW-LEVEL HELPERS ─────────────
+_now  = lambda: int(time.time())
+_dec  = lambda n: Decimal(str(n))
+table = lambda: dynamodb.Table(TABLE_NAME)
 
-def _decimal(n: int | float) -> Decimal:
-    return Decimal(str(n))
-
-def _put_item(item: dict) -> None:
-    dynamodb.Table(TABLE_NAME).put_item(Item=item)
-
-def _make_item(
-    robot_id: str,
-    battery: int | None,
-    motion: Motion | None,
-    mode: str | None,
-    message: str,
-    ttl_days: int,
-) -> dict:
-    """Build the attribute map with validation."""
-    ts      = _epoch()
-    expires = ts + ttl_days * 24 * 3600
-
-    if battery is not None and not (0 <= battery <= 100):
+def _build_item(
+    battery: int,
+    mode: str,
+    action: Action,
+    *,
+    ts_override: int | None = None,      # used only by seeder
+) -> dict[str, Any]:
+    if not (0 <= battery <= 100):
         raise ValueError("battery must be 0–100")
-    if motion is not None and motion not in Motion:
-        raise ValueError(f"motion must be one of {list(Motion)}")
-    if mode is not None and mode.upper() not in VALID_MODES:
-        raise ValueError("mode must be 'AUTO' or 'MANUAL'")
+    mode_u = mode.upper()
+    if mode_u not in VALID_MODES:
+        raise ValueError("mode must be AUTO or MANUAL")
 
-    item: dict = {
-        "RobotId": robot_id,
-        "LogTS":   _decimal(ts),
-        "TTL":     _decimal(expires),
-        "Message": message,
+    ts      = ts_override or _now()
+    expires = ts + TTL_DAYS * 24 * 3600
+
+    return {
+        "RobotId": ROBOT_ID,
+        "LogTS":   _dec(ts),
+        "TTL":     _dec(expires),
+        "Battery": _dec(battery),
+        "Mode":    mode_u,
+        "Action":  action.value,
     }
-    if battery is not None:
-        item["Battery"] = _decimal(battery)
-    if motion is not None:
-        item["Motion"] = motion.value
-    if mode is not None:
-        item["Mode"] = mode.upper()
-    return item
 
-def _latest_item(
-    robot_id: str,
-    *,
-    projection: str | None = None,
-    expr_attr_names: dict[str, str] | None = None,
-) -> dict | None:
+def _query_latest(limit: int = 1) -> List[dict]:
+    resp = table().query(
+        KeyConditionExpression=Key("RobotId").eq(ROBOT_ID),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    return resp.get("Items", [])
+
+# ─────────────── DEMO SEEDER ────────────────
+def seed_demo_data() -> None:
     """
-    Return the newest item for a robot.
-
-    Parameters
-    ----------
-    robot_id : str
-        The robot we’re querying.
-    projection : str | None
-        A comma-separated ProjectionExpression (e.g. "Battery,Mode").
-    expr_attr_names : dict[str, str] | None
-        ExpressionAttributeNames mapping for any reserved words used
-        in the ProjectionExpression.
+    Insert five sample rows if the table is empty.
+    Ensures unique (RobotId, LogTS) by adding +1 s offset per row.
     """
-    table = dynamodb.Table(TABLE_NAME)
+    if table().scan(Select="COUNT", Limit=1)["Count"]:
+        return                              # already data → skip seeding
 
-    kwargs: dict = {
-        "KeyConditionExpression": Key("RobotId").eq(robot_id),
-        "ScanIndexForward": False,   # newest first
-        "Limit": 1,
+    print("⛵  Seeding example rows …")
+    demo_rows = [
+        (95, "AUTO",   Action.FORWARD),
+        (92, "AUTO",   Action.RIGHT),
+        (88, "AUTO",   Action.RIGHT),
+        (70, "MANUAL", Action.LEFT),
+        (65, "MANUAL", Action.STOP),
+    ]
+    base_ts = _now()
+    with table().batch_writer() as batch:
+        for off, (batt, mode, act) in enumerate(demo_rows):
+            item = _build_item(batt, mode, act, ts_override=base_ts + off)
+            batch.put_item(Item=item)
+    print(f"✓ Inserted {len(demo_rows)} demo items")
+
+# ───────────────── FASTAPI ───────────────────
+create_table_if_missing()
+seed_demo_data()           # <-- remove this line if you don’t want seeding
+
+app = FastAPI(
+    title="KAY-O Operation Log API",
+    version="3.1.0",
+    docs_url="/", redoc_url=None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ───────────── DTOs (request / response) ─────────────
+class LogIn(BaseModel):
+    battery: int = Field(..., ge=0, le=100, description="Battery %")
+    mode:    str = Field(
+        ...,
+        pattern=r"(?i)^(auto|manual)$",
+        description="'AUTO' or 'MANUAL'",
+    )
+    action:  Action
+
+class LogOut(BaseModel):
+    battery: int
+    mode:    str
+    action:  Action
+    time:    int = Field(..., description="Epoch seconds (LogTS)")
+
+# ────────────────── ROUTES ───────────────────
+@app.post("/log", status_code=204)
+def write_log(body: LogIn):
+    """Write one operation row for KAY-O."""
+    table().put_item(Item=_build_item(body.battery, body.mode, body.action))
+    return None                               # 204 No Content
+
+@app.get("/latest", response_model=LogOut)
+def read_latest():
+    """Return the newest stored row for KAY-O."""
+    items = _query_latest(1)
+    if not items:
+        raise HTTPException(404, "No data yet")
+    it = items[0]
+    return {
+        "battery": int(it["Battery"]),
+        "mode":    it["Mode"],
+        "action":  it["Action"],
+        "time":    int(it["LogTS"]),
     }
-    if projection:
-        kwargs["ProjectionExpression"] = projection
-    if expr_attr_names:
-        kwargs["ExpressionAttributeNames"] = expr_attr_names
 
-    resp  = table.query(**kwargs)
-    items = resp.get("Items", [])
-    return items[0] if items else None
-
-# ─────────────────────────────── PUBLIC API ────────────────────────────────────
-def update_status(
-    robot_id: str,
-    *,
-    battery: int | None = None,
-    motion:  Motion | None = None,
-    mode:    str | None = None,
-    message: str = "",
-    ttl_days: int = TTL_DAYS,
-) -> None:
-    """
-    Write *one* log line that may include updated battery, motion, and/or mode.
-    Supply only the fields that actually changed.
-    """
-    if battery is None and motion is None and mode is None:
-        raise ValueError("At least one of battery, motion or mode must be set")
-    item = _make_item(robot_id, battery, motion, mode, message, ttl_days)
-    _put_item(item)
-
-# Convenience wrappers ---------------------------------------------------------
-def set_battery(robot_id: str, battery: int, *, message: str = "") -> None:
-    """Log a new battery level."""
-    update_status(robot_id, battery=battery, message=message)
-
-def set_mode(robot_id: str, mode: str, *, message: str = "") -> None:
-    """Log a mode change ('AUTO' | 'MANUAL')."""
-    update_status(robot_id, mode=mode, message=message)
-
-# Getters ----------------------------------------------------------------------
-def get_battery(robot_id: str) -> int | None:
-    """Return the latest battery % for the robot, or None if unknown."""
-    item = _latest_item(robot_id, projection="Battery")
-    return int(item["Battery"]) if item and "Battery" in item else None
-
-def get_mode(robot_id: str) -> str | None:
-    """Return 'AUTO' or 'MANUAL' (latest), or None if unknown."""
-    item = _latest_item(
-        robot_id,
-        projection="#m",                 # alias in ProjectionExpression
-        expr_attr_names={"#m": "Mode"},  # reserved word mapping
-    )
-    return item["Mode"] if item and "Mode" in item else None
-
-# ────────────────────────────── DEMO / SELF-TEST ───────────────────────────────
-if __name__ == "__main__":
-    create_table_if_missing()
-
-    # Example usage -------------------------------------------------------------
-    update_status(
-        robot_id="R2-D2",
-        battery=85,
-        motion=Motion.FORWARD,
-        mode="AUTO",
-        message="Patrolling sector-7",
-    )
-    set_battery("R2-D2", 84, message="Battery drain observed")
-    set_mode("R2-D2", "MANUAL", message="Operator takeover")
-
-    print("Latest battery:", get_battery("R2-D2"))
-    print("Latest mode   :", get_mode("R2-D2"))
+@app.get("/history", response_model=list[LogOut])
+def read_history(limit: int = Query(20, ge=1, le=500)):
+    """Return *limit* most-recent rows (newest → oldest)."""
+    items = _query_latest(limit=limit)
+    return [
+        {
+            "battery": int(it["Battery"]),
+            "mode":    it["Mode"],
+            "action":  it["Action"],
+            "time":    int(it["LogTS"]),
+        }
+        for it in items
+    ]
