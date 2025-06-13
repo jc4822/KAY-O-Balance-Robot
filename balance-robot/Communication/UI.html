@@ -189,29 +189,32 @@
     let latestBatteryPct = 0;           
     let latestMode       = "MANUAL";  
     async function logToDatabase(action) {
-  
-      if (latestBatteryPct === 0) return;
-
+      if (latestBatteryPct === 0 || action === "stop") return;
       try {
         const resp = await fetch(`${API_BASE}/log`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-        battery: latestBatteryPct,           // integer 0-100
-        mode:    latestMode,                 // "AUTO" | "MANUAL"
-        action:  action.toUpperCase(),       // matches server Enum
-      }),
-    });
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-    console.log("📝 Logged to DB:", action, latestBatteryPct, latestMode);
-  } catch (err) {
-    console.warn("DB log failed:", err.message);
-  }
-}    
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            battery: latestBatteryPct,
+            mode:    latestMode,
+            action:  action.toUpperCase()
+          }),
+        });
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+        console.log("📝 Logged to DB:", action, latestBatteryPct, latestMode);
+      } catch (err) {
+        console.warn("DB log failed:", err.message);
+      }
+    }  
 
     
     
-
+ function sendControl(direction) {
+      if (dataChannel && dataChannel.readyState === "open") {
+        dataChannel.send(JSON.stringify({ direction }));
+        logToDatabase(direction);
+      }
+    }
 function handleTelemetry(json) {
   try {
     const t = JSON.parse(json);
@@ -261,6 +264,14 @@ async function startWebRTC() {
         sel.parentNode.querySelector('span').textContent = "online";
       };
       
+       window.addEventListener('load', () => {
+      startWebRTC().catch(e => console.error("startWebRTC() threw:", e));
+      // … initMap, simulateRobot, robot selector, etc. …
+    });
+
+    // key controls
+
+
       dataChannel.onmessage = (evt) => {
         console.log("🛰️ Telemetry from Pi:", evt.data);
         try {
