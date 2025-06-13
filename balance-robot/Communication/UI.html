@@ -209,9 +209,6 @@
   }
 }    
 
-    
-    
-
 function handleTelemetry(json) {
   try {
     const t = JSON.parse(json);
@@ -476,7 +473,7 @@ async function startWebRTC() {
     function simulateRobot() {
       const depthValue = document.getElementById('depthValue');
       const data = sensorData[currentDataIndex];
-      console.log(data);
+      //console.log(data);
       depthValue.textContent = `${data.depth.toFixed(2)}m`;
       mapState.robotAngle = data.orient_y.toFixed(2);
 
