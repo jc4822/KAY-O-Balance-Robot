@@ -59,6 +59,24 @@ const float Robot_Backward_Speed = -0.9f * DEG_TO_RAD;
 const float Rotation_Rate = 1.0f;
 
 
+
+
+
+unsigned long loopTimer = 0;
+unsigned long printTimer = 0;
+const int TELEMETERY_INTERVAL_MS = 50;
+unsigned long telemetryTimer = 0;
+
+float pos_x = 0.0f;             // X轴位置（米）
+float pos_y = 0.0f;             // Y轴位置（米）
+float yaw_angle = 0.0f;         // 偏航角（度）
+float prev_yaw_angle = 0.0f;    // 上一周期的偏航角
+unsigned long last_position_update = 0; // 上次位置更新时间
+
+int32_t  last_steps1 = 0;
+int32_t  last_steps2 = 0;
+
+
 ESP32Timer ITimer(3);
 Adafruit_MPU6050 mpu;
 
@@ -173,6 +191,7 @@ void setup() {
         while (1) { delay(10); }
     }
     Serial.println("Stepper Interrupt Initialized.");
+    Serial.println("Telemetry data format: {\"a\": angle, \"x\": pos_x, \"y\": pos_y");
 
    
     step1.setAccelerationRad(40.0); 
@@ -196,8 +215,66 @@ void setup() {
  rotation_speed = 0.0f;
 }
 
-unsigned long loopTimer = 0;
-unsigned long printTimer = 0;
+// 机器人物理参数（根据实际机器人调整）
+const float WHEEL_DIAMETER = 0.065;      // 轮子直径（米）
+const float WHEEL_CIRCUMFERENCE = PI * WHEEL_DIAMETER; // 轮子周长
+const float WHEEL_BASE = 0.11;           // 轮间距（米）
+const int STEPS_PER_REVOLUTION = 3200;    // 200步/转 * 16微步
+
+float lastprinttime = 0;
+
+void updatePosition() {
+    unsigned long current_time = millis();
+    float delta_time = (current_time - last_position_update) / 1000.0f; // 转换为秒
+    
+    if (delta_time > 0) {
+        // 获取当前电机位置（步数）
+        int32_t current_steps1 = step1.getPosition();
+        int32_t current_steps2 = step2.getPosition();
+
+        // 计算步数变化量（考虑电机方向）
+        float delta_steps1 = static_cast<float>(current_steps1 - last_steps1);
+        float delta_steps2 = -static_cast<float>(current_steps2 - last_steps2); // 取负因为电机反向安装
+        
+        // 保存当前步数用于下次计算
+        last_steps1 = current_steps1;
+        last_steps2 = current_steps2;
+        
+        // 将步数转换为距离（米）
+        float distance1 = (delta_steps1 / STEPS_PER_REVOLUTION) * WHEEL_CIRCUMFERENCE;
+        float distance2 = (delta_steps2 / STEPS_PER_REVOLUTION) * WHEEL_CIRCUMFERENCE;
+        
+        // 计算线速度和角速度
+        float linear_velocity = (distance1 + distance2) / (2 * delta_time);
+        float angular_velocity = (distance2 - distance1) / (WHEEL_BASE * delta_time);
+        
+        // 更新偏航角（度）
+        yaw_angle += angular_velocity * delta_time * RAD_TO_DEG;
+        
+        // 规范化偏航角到0-360度范围
+        if (yaw_angle >= 360.0f) yaw_angle -= 360.0f;
+        if (yaw_angle < 0.0f) yaw_angle += 360.0f;
+        
+        // 更新位置（使用平均偏航角）
+        float avg_yaw = (prev_yaw_angle + yaw_angle) / 2.0f;
+        pos_x += linear_velocity * delta_time * cos(avg_yaw * DEG_TO_RAD);
+        pos_y += linear_velocity * delta_time * sin(avg_yaw * DEG_TO_RAD);
+        
+        if (millis() - lastprinttime >= 1000) {
+            lastprinttime = millis();
+            Serial.print("current_steps1: "); Serial.print(current_steps1);
+            Serial.print(", current_steps2: "); Serial.print(current_steps2);
+            Serial.print(", pos_x: "); Serial.print(pos_x, 3);
+            Serial.print(", pos_y: "); Serial.print(pos_y, 3);
+            Serial.print(", yaw_angle: "); Serial.print(yaw_angle, 3);
+            Serial.println();
+        }
+
+        // 保存当前偏航角用于下次计算
+        prev_yaw_angle = yaw_angle;
+        last_position_update = current_time;
+    }
+}
 
 
 void loop() {
@@ -209,12 +286,27 @@ void loop() {
         computePID();
         handleSerialInput();
         applyMotorSpeeds();
+
+        updatePosition();
     }
 
+    if (millis() >= telemetryTimer) {
+        telemetryTimer += TELEMETERY_INTERVAL_MS;
+
+        String telemetry = "{\"a\":";
+        telemetry += round(yaw_angle, 2);
+        telemetry += ",\"x\":";
+        telemetry += round(pos_x, 3);
+        telemetry += ",\"y\":";
+        telemetry += round(pos_y, 3);
+        telemetry += "}";
+        
+        Serial.println(telemetry);
+    }
    
     if (millis() >= printTimer) {
         printTimer += PRINT_INTERVAL_MS;
-        Serial.print("Angle(deg): "); Serial.print(current_angle * RAD_TO_DEG - OBSERVED_UPRIGHT_OFFSET_DEG, 2);
+        Serial.print("Pitch Angle(deg): "); Serial.print(current_angle * RAD_TO_DEG - OBSERVED_UPRIGHT_OFFSET_DEG, 2);
         Serial.println();
     }
 }
