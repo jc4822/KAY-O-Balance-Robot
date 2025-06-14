@@ -64,7 +64,7 @@ const float Rotation_Rate = 1.0f;
 
 unsigned long loopTimer = 0;
 unsigned long printTimer = 0;
-const int TELEMETERY_INTERVAL_MS = 50;
+const int TELEMETERY_INTERVAL_MS = 100;
 unsigned long telemetryTimer = 0;
 
 float pos_x = 0.0f;             // X轴位置（米）
@@ -294,11 +294,11 @@ void loop() {
         telemetryTimer += TELEMETERY_INTERVAL_MS;
 
         String telemetry = "{\"a\":";
-        telemetry += round(yaw_angle, 2);
+        telemetry += yaw_angle;
         telemetry += ",\"x\":";
-        telemetry += round(pos_x, 3);
+        telemetry += pos_x;
         telemetry += ",\"y\":";
-        telemetry += round(pos_y, 3);
+        telemetry += pos_y;
         telemetry += "}";
         
         Serial.println(telemetry);
