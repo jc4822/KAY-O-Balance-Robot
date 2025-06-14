@@ -186,62 +186,22 @@
 
     let pc = null;
     let dataChannel = null;
-    let latestBatteryPct = 0;           
-    let latestMode       = "MANUAL";  
-    async function logToDatabase(action) {
-  
-      if (latestBatteryPct === 0) return;
 
-      try {
-        const resp = await fetch(`${API_BASE}/log`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-        battery: latestBatteryPct,           // integer 0-100
-        mode:    latestMode,                 // "AUTO" | "MANUAL"
-        action:  action.toUpperCase(),       // matches server Enum
-      }),
-    });
-    if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
-    console.log("📝 Logged to DB:", action, latestBatteryPct, latestMode);
-  } catch (err) {
-    console.warn("DB log failed:", err.message);
-  }
-}    
-
-function handleTelemetry(json) {
-  try {
-    const t = JSON.parse(json);
-    // battery
-    if (typeof t.battery === "number") {
-      latestBatteryPct = t.battery;
-      document.getElementById("battery").textContent = t.battery + "%";
+    // 1) Define sendControl() globally
+    function sendControl(direction) {
+      if (dataChannel && dataChannel.readyState === "open") {
+        const msg = {
+          robotId:   document.querySelector('input[name="robot"]:checked').value,
+          action:    "move",
+          direction: direction,
+          timestamp: new Date().toISOString()
+        };
+        dataChannel.send(JSON.stringify(msg));
+        console.log("Sent control →", msg);
+      } else {
+        console.warn("Cannot sendControl; dataChannel not open");
+      }
     }
-    // optional mode coming from Pi
-    if (t.mode) latestMode = t.mode.toUpperCase();
-    // pid display
-    if (t.pidP != null) document.getElementById("pidP").textContent = t.pidP;
-    if (t.pidI != null) document.getElementById("pidI").textContent = t.pidI;
-    if (t.pidD != null) document.getElementById("pidD").textContent = t.pidD;
-  } catch (e) {
-    console.warn("Bad telemetry JSON:", e);
-  }
-}
-
-/* -------------------- 6.  WEBRTC SET-UP ----------------------- */
-/* unchanged except one line that calls handleTelemetry */
-async function startWebRTC() {
-  pc = new RTCPeerConnection({ iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
-  pc.addTransceiver("video",{direction:"recvonly"});
-  dataChannel = pc.createDataChannel("control",{ordered:true});
-
-  dataChannel.onopen  = () => console.log("▶️ DataChannel OPEN");
-  dataChannel.onclose = () => console.log("🔌 DataChannel closed");
-  dataChannel.onmessage = e => handleTelemetry(e.data);
-
-  /* … everything else exactly as before … */
-}
-
     // 2) Set up WebRTC / DataChannel
     async function startWebRTC() {
       pc = new RTCPeerConnection({
@@ -257,7 +217,6 @@ async function startWebRTC() {
         const sel = document.querySelector('input[name="robot"]:checked');
         sel.parentNode.querySelector('span').textContent = "online";
       };
-      
       dataChannel.onmessage = (evt) => {
         console.log("🛰️ Telemetry from Pi:", evt.data);
         try {
@@ -473,7 +432,7 @@ async function startWebRTC() {
     function simulateRobot() {
       const depthValue = document.getElementById('depthValue');
       const data = sensorData[currentDataIndex];
-      console.log(data);
+      //console.log(data);
       depthValue.textContent = `${data.depth.toFixed(2)}m`;
       mapState.robotAngle = data.orient_y.toFixed(2);
 
