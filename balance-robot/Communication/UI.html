@@ -177,12 +177,14 @@
     </div>
     
     <div id="coordinateDisplay"></div>
+    <button id="btnPhoto" class="ctrl-btn" style="position:absolute;bottom:5vmin;right:5vmin;">📸</button>
   </div>
 
     <script>
     let sensorData = {}; 
 
     const SIGNALING_BASE = `http://${window.location.hostname}:8000`;
+    const LOG_API = "http://35.177.215.40:8001";
 
     let pc = null;
     let dataChannel = null;
@@ -197,11 +199,31 @@
           timestamp: new Date().toISOString()
         };
         dataChannel.send(JSON.stringify(msg));
+
+        
+        if (direction && direction.toLowerCase() !== "stop") {
+          try {
+            const battStr = document.getElementById("battery")?.textContent || "0";
+            const battery = parseInt(battStr.replace(/[^0-9]/g, ''), 10) || 0;
+            fetch(LOG_API + "/log", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                battery: battery,
+                mode: "MANUAL",
+                action: direction.toUpperCase()
+              })
+            });
+          } catch (err) {
+            console.warn("Auto‑log failed:", err);
+          }
+        }
         console.log("Sent control →", msg);
       } else {
         console.warn("Cannot sendControl; dataChannel not open");
       }
     }
+
     // 2) Set up WebRTC / DataChannel
     async function startWebRTC() {
       pc = new RTCPeerConnection({
@@ -591,6 +613,41 @@
       r.addEventListener('change', () => updateToggle());
     });
     updateToggle();
-  </script>
+  
+// 📸  --- Take photo and POST to /image
+async function takePhoto() {
+  const video = document.getElementById("videoStream");
+  if (!video || video.readyState < 2) {
+    alert("Camera not ready!");
+    return;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+  const base64 = canvas.toDataURL("image/png").split(",")[1];
+  const payload = {
+    timestamp: Math.floor(Date.now() / 1000),
+    image: base64
+  };
+  try {
+    const r = await fetch(LOG_API + "/image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (r.status === 204) {
+      alert("✅ Image uploaded!");
+    } else {
+      const txt = await r.text();
+      alert("❌ Upload failed:" + txt);
+    }
+  } catch (err) {
+    alert("❌ Error: " + err.message);
+  }
+}
+document.getElementById("btnPhoto")?.addEventListener("click", takePhoto);
+
+</script>
 </body>
 </html>
