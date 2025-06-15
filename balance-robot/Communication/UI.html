@@ -75,6 +75,7 @@
       border-radius: 1vmin;
       background: #000;
       z-index: 5;
+      transform: rotate(180deg);
     }
     #pos_map{
       position: absolute;
@@ -578,26 +579,28 @@
     });
 
     // 4) Attach on-screen button listeners 
-    function bindBtn(id, dirName) {
-      const btn = document.getElementById(id);
-      console.log(`Binding pointerdown for ${id} → ${dirName}`);
-      btn.addEventListener('pointerdown', () => {
-        console.log(`${id} pointerdown → sendControl("${dirName}")`);
-        sendControl(dirName);
+    ["Forward","Backward","Left","Right"].forEach(dir => {
+      const btn  = document.getElementById("btn" + dir);
+      const move = dir.toLowerCase();
+
+      let intervalId;
+
+      btn.addEventListener("pointerdown", e => {
+        btn.setPointerCapture(e.pointerId);
+        // send immediately
+        sendControl(move);
+        // then every 100 ms while held
+        intervalId = setInterval(() => sendControl(move), 100);
       });
-      btn.addEventListener('pointerup', () => {
-        console.log(`${id} pointerup → sendControl("stop")`);
-        sendControl("stop");
+
+      ["pointerup","pointercancel"].forEach(evt => {
+        btn.addEventListener(evt, e => {
+          clearInterval(intervalId);
+          sendControl("stop");
+          btn.releasePointerCapture(e.pointerId);
+        });
       });
-      btn.addEventListener('pointerleave', () => {
-        console.log(`${id} pointerleave → sendControl("stop")`);
-        sendControl("stop");
-      });
-    }
-    bindBtn('btnForward',  'forward');
-    bindBtn('btnBackward', 'backward');
-    bindBtn('btnLeft',     'left');
-    bindBtn('btnRight',    'right');
+    });
 
     // 5) Robot selector dropdown logic
     const toggleBtn = document.getElementById('toggleSelector');
@@ -614,7 +617,7 @@
     });
     updateToggle();
   
-// 📸  --- Take photo and POST to /image
+//  Take photo and POST to /image
 async function takePhoto() {
   const video = document.getElementById("videoStream");
   if (!video || video.readyState < 2) {
