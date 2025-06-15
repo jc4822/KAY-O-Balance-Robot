@@ -54,11 +54,11 @@ float alpha = 0.98f;
 
 float rotation_speed = 0.0f;
 
-const float Robot_Forward_Speed = 0.9f * DEG_TO_RAD;
-const float Robot_Backward_Speed = -0.9f * DEG_TO_RAD;
+const float Robot_Backward_Speed = 0.9f * DEG_TO_RAD;
+const float Robot_Forward_Speed = -0.9f * DEG_TO_RAD;
 const float Rotation_Rate = 1.0f;
 
-
+const float TILT_LIMIT_DEG = 15.0f;
 
 
 
@@ -285,6 +285,19 @@ void loop() {
         calculateTiltAngle();
         computePID();
         handleSerialInput();
+
+        const float TILT_LIMIT_RAD = TILT_LIMIT_DEG * DEG_TO_RAD;
+        float calibrated_angle = current_angle - ANGLE_CALIBRATION_OFFSET_RAD;
+
+         
+        if (abs(calibrated_angle) > TILT_LIMIT_RAD) {
+            
+            digitalWrite(STEPPER_EN_PIN, HIGH); 
+
+        } else {
+            
+            digitalWrite(STEPPER_EN_PIN, LOW); 
+        }
         applyMotorSpeeds();
 
         updatePosition();
@@ -367,11 +380,11 @@ void handleSerialInput() {
         cmdStr.trim();
 
         if (cmdStr == "S") {
-            angle_setpoint = Robot_Forward_Speed;
+            angle_setpoint = Robot_Backward_Speed;
          rotation_speed = 0.0f;
             Serial.println("CMD: Backward");
         } else if (cmdStr == "W") {
-            angle_setpoint = Robot_Backward_Speed;
+            angle_setpoint = Robot_Forward_Speed;
          rotation_speed = 0.0f;
             Serial.println("CMD: Forward");
         } else if (cmdStr == "A") {
