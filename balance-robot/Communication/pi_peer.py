@@ -4,7 +4,8 @@ import json
 import subprocess
 import traceback
 import serial               # pyserial for ESP32 communication
-import av                   # PyAV for H.264 decoding
+import av    
+import time               # PyAV for H.264 decoding
 from aiohttp import web
 
 from aiortc import (
@@ -15,6 +16,8 @@ from aiortc import (
     VideoStreamTrack,
 )
 from av import VideoFrame   # import from PyAV
+
+control_channel = None
 
 ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"])
@@ -36,7 +39,7 @@ class LibcameraH264Track(VideoStreamTrack):
 
     def __init__(self, width=640, height=480, fps=15):
         super().__init__()  # initialize base class
-
+        self.frame_id = 0
         cmd = [
             "libcamera-vid",
             "-t", "0",
@@ -60,6 +63,14 @@ class LibcameraH264Track(VideoStreamTrack):
         self.frame_iterator = self.container.decode(video=0)
 
     async def recv(self):
+        self.frame_id += 1
+        capture_ts = int(time.time() * 1000)
+        if control_channel and control_channel.readyState == "open":
+            control_channel.send(json.dumps({
+                "frame_id":   self.frame_id,
+                "capture_ts": capture_ts
+            }))
+
         pts, time_base = await self.next_timestamp()
 
         av_frame = next(self.frame_iterator, None)
@@ -124,10 +135,27 @@ async def offer(request):
         @pc.on("datachannel")
         def on_datachannel(channel):
             print(f"[*] DataChannel created for peer_id={peer_id}: label={channel.label}")
+            global control_channel
+            control_channel = channel
 
             @channel.on("message")
             def on_message(message):
-                # Expect JSON like: {"direction":"forward"}
+                msg = json.loads(message)
+                if msg.get("type") == "ping":
+                    channel.send(json.dumps({
+                        "type": "pong",
+                        "ts": msg["ts"]
+                    }))
+                    return
+                # ── clock sync request ──
+                if msg.get("type") == "sync_req":
+                    channel.send(json.dumps({
+                        "type":      "sync_res",
+                        "ts_client": msg["ts_client"],
+                        "ts_server": int(time.time() * 1000)
+                    }))
+                    return
+
                 try:
                     cmd = json.loads(message)
                 except Exception as e:

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Robot Control UI with WebRTC (No-Trickle ICE)</title>
+  <title>Robot Control UI</title>
   <style>
     html, body {
       margin: 0;
@@ -189,6 +189,10 @@
 
     let pc = null;
     let dataChannel = null;
+    const frameMap   = new Map();
+    let   seenFrames = 0;
+    const MAX_SAMPLES = 15;
+    let clockOffset = 0;
 
     // 1) Define sendControl() globally
     function sendControl(direction) {
@@ -239,9 +243,34 @@
         // Mark selected robot as online
         const sel = document.querySelector('input[name="robot"]:checked');
         sel.parentNode.querySelector('span').textContent = "online";
+        const t0 = Date.now();
+        dataChannel.send(JSON.stringify({
+          type:      "sync_req",
+          ts_client: t0
+        }));
+        setInterval(() => {
+          const t0 = Date.now();
+          dataChannel.send(JSON.stringify({ type: "ping", ts: t0 }));
+        }, 1000);
       };
       dataChannel.onmessage = (evt) => {
-        console.log("🛰️ Telemetry from Pi:", evt.data);
+        const msg = JSON.parse(evt.data);
+        if (msg.type === "pong") {
+          const rtt = Date.now() - msg.ts;
+          console.log(`Control RTT: ${rtt} ms`);
+          return;
+        }
+        if (msg.type === "sync_res") {
+          // how far Pi’s clock is ahead of browser’s clock
+          clockOffset = msg.ts_client - msg.ts_server;
+          console.log("Clock offset (ms):", clockOffset.toFixed(1));
+          return;
+        }
+        if (msg.frame_id) {
+          frameMap.set(msg.frame_id, msg.capture_ts);
+          return;
+        }
+        console.log("Telemetry from Pi:", evt.data);
         try {
           const telemetry = JSON.parse(evt.data);
           document.getElementById("battery").textContent = telemetry.battery + "%";
@@ -253,17 +282,33 @@
         }
       };
       dataChannel.onclose = () => {
-        console.log("🔌 DataChannel closed");
+        console.log("DataChannel closed");
         const sel = document.querySelector('input[name="robot"]:checked');
         sel.parentNode.querySelector('span').textContent = "offline";
       };
 
-      pc.ontrack = (ev) => {
-        const video = document.getElementById("videoStream");
+      const video = document.getElementById("videoStream");
+      pc.ontrack = ev => {
         if (!video.srcObject) {
           video.srcObject = ev.streams[0];
+          // start exactly one measurement loop
+          video.requestVideoFrameCallback(measureLatency);
         }
       };
+      function measureLatency(now, metadata) {
+        seenFrames++;
+        const captureTs = frameMap.get(seenFrames);
+        if (captureTs !== undefined) {
+        const arrivalTs = Date.now() - clockOffset;
+          console.log(
+            `Frame ${seenFrames} latency: ${ (arrivalTs - captureTs).toFixed(1) } ms`
+          );
+        }
+        if (seenFrames < MAX_SAMPLES) {
+          video.requestVideoFrameCallback(measureLatency);
+        }
+      }
+
 
       // 2a) Create an SDP offer and wait for ICE gathering
       const offer = await pc.createOffer();
@@ -640,13 +685,13 @@ async function takePhoto() {
       body: JSON.stringify(payload)
     });
     if (r.status === 204) {
-      alert("✅ Image uploaded!");
+      alert("Image uploaded!");
     } else {
       const txt = await r.text();
-      alert("❌ Upload failed:" + txt);
+      alert("Upload failed:" + txt);
     }
   } catch (err) {
-    alert("❌ Error: " + err.message);
+    alert("Error: " + err.message);
   }
 }
 document.getElementById("btnPhoto")?.addEventListener("click", takePhoto);
