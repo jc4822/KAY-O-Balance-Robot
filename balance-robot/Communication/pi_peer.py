@@ -31,6 +31,19 @@ ESP32_BAUDRATE    = 115200
 pcs = set()                      # track active PeerConnections
 esp32_serial = None              # will be set to serial.Serial()
 
+async def telemetry_loop():
+    while True:
+        if esp32_serial and esp32_serial.in_waiting:
+            raw = esp32_serial.readline()
+            line = raw.decode('utf-8', errors='ignore').strip()
+            try:
+                data = json.loads(line)
+                if control_channel and control_channel.readyState == "open":
+                    control_channel.send(json.dumps(data))
+            except Exception:
+                pass
+        await asyncio.sleep(0.1)
+
 class LibcameraH264Track(VideoStreamTrack):
     """
     A VideoStreamTrack that runs `libcamera-vid` as a subprocess in H.264 mode,
@@ -233,6 +246,7 @@ async def main():
             timeout=0.1
         )
         print(f"[*] Opened ESP32 serial on {ESP32_SERIAL_PORT} @ {ESP32_BAUDRATE} baud")
+        asyncio.create_task(telemetry_loop())
     except Exception as e:
         print(f"[!] ERROR: could not open ESP32 serial on {ESP32_SERIAL_PORT}:", e)
         esp32_serial = None
