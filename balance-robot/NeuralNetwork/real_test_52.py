@@ -9,19 +9,21 @@ SCALE = (72,96)
 
 #input_dir = "/home/a1/Y2P_R/photos/in_rgb"
 #output_dir = "/home/a1/Y2P_R/photos/out_png"
-input_dir = "/home/a1/Y2P_R/resize_144/PairsSample"
-output_dir = "/home/a1/Y2P_R/resize_144/PairsSample"
-os.makedirs(output_dir, exist_ok=True) 
+#input_dir = "/home/a1/Y2P_R/resize_144/PairsSample"
+#output_dir = "/home/a1/Y2P_R/resize_144/PairsSample"
+#os.makedirs(output_dir, exist_ok=True) 
+input_dir = ''
+output_dir = ''
 
 # 设备设置
 device = torch.device("cpu")
 model = DepthNet52().to(device)
-model.load_state_dict(torch.load("Z_NYU_53_0.56.pth", map_location=device))
+model.load_state_dict(torch.load("model_52_0.59.pth", map_location=device))
 model.eval()
 
 # 图像预处理
 transform = transforms.Compose([
-    transforms.Resize((144, 192)),  # (高度, 宽度)
+    transforms.Resize((144, 192)),  # (H, W)
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                         std=[0.229, 0.224, 0.225])
@@ -44,7 +46,7 @@ for i in range(100,110):
         KRKiUV_Ts[j] = KRKiUV_Ts[j].unsqueeze(0).to(device)
         KT_Ts[j] = KT_Ts[j].unsqueeze(0).to(device)
 
-    refined_depth,_,_,_ = model(left_tensor, right_tensor, KRKiUV_Ts, KT_Ts, )
+    refined_depth,_,_,_ = model(left_tensor, right_tensor, KRKiUV_Ts, KT_Ts)
 
     depth_map = refined_depth.squeeze().cpu().detach().numpy()
     depth_map = (depth_map * 5000).clip(0, 65535).astype(np.uint16)

@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>Robot Control UI</title>
+  <style>
+    /* 基础样式设置 */
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #f0f0f0;
+      touch-action: none; /* 禁用触摸默认行为 */
+      user-select: none; /* 禁止用户选择文本 */
+      font-family: sans-serif;
+    }
+    #gameArea {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    /* 信息面板样式 */
+    #infoPanel {
+      position: absolute;
+      top: 2vmin;
+      left: 2vmin;
+      background: rgba(255, 255, 255, 0.85);
+      padding: 1.5vmin 2vmin;
+      border-radius: 1vmin;
+      box-shadow: 0 0.5vmin 1.5vmin rgba(0, 0, 0, 0.2);
+      z-index: 10;
+      font-size: 2.5vmin;
+    }
+    #infoPanel p {
+      margin: 1vmin 0;
+    }
+    /* 摄像头画面区域 */
+    #cameraFeed {      
+      position: absolute;
+      top: 15vh;
+      left: 20vw;
+      width: 50vw;
+      height: 70vh;
+      border: 0.5vmin dashed #666;
+      border-radius: 1vmin;
+      background: #000;
+      z-index: 5;
+      transform: rotate(360deg); /* 旋转180度 */
+    }
+    /* 位置地图区域 */
+    #pos_map{
+      position: absolute;
+      top: 15vh;
+      left: 72vw;
+      width: 21vw;
+      height: 38vh;
+      border: 0.5vmin dashed #666;
+      border-radius: 1vmin;
+      background: #000;
+      z-index: 5;
+    }
+    /* 点地图区域 */
+    #point_map{
+      position: absolute;
+      top: 57vh;
+      left: 72vw;
+      width: 21vw;
+      height: 28vh;
+      border: 0.5vmin dashed #666;
+      border-radius: 1vmin;
+      background: #000;
+      z-index: 5;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameArea">
+    <div id="infoPanel">
+      <p>Depth measured: <span class="value-display" id="depthValue">1.25m</span></p>
+      <p>pos_x: <span class="value-display" id="pos_x">0</span>, 
+         pos_y: <span class="value-display" id="pos_y">0</span>,
+         yaw: <span class="value-display" id="yaw">0</span> </p>
+    </div>
+
+    <div id="cameraFeed">
+      <canvas id="map2Canvas"></canvas>
+    </div>
+
+    <div id="pos_map">
+      <!-- 位置地图将在这里渲染 -->
+    </div>
+    
+    <div id="coordinateDisplay"></div>
+  </div>
+
+  <script>
+    // 全局变量
+    let ws = null; // WebSocket连接
+    let isStop = true; // 机器人停止状态
+    let MapArray = [0, 0, 0, 0]; // 存储深度、x位置、y位置和偏航角
+
+    // 地图相关变量
+    const posMap = document.getElementById('pos_map');
+    const DISPLAY_SIZE = 2;
+    const OFFSET = 100;
+    const MAP_SIZE = 250;
+    
+    // 创建地图数据数组 (3通道: R,G,B)
+    let mapData = new Array(3);
+    for (let c = 0; c < 3; c++) {
+      mapData[c] = new Array(MAP_SIZE);
+      for (let i = 0; i < MAP_SIZE; i++) {
+        mapData[c][i] = new Array(MAP_SIZE).fill(0);
+      }
+    }
+
+    let targetPoint = null;
+    
+
+
+    // 连接WebSocket
+    function connectWebSocket() {
+      ws = new WebSocket('ws://localhost:8765');
+      
+      ws.onopen = () => {
+        console.log("<> Connected to Python script");
+        
+        const initData = {
+          type: "init",
+          x: OFFSET,
+          y: OFFSET,
+          yaw: 0,
+          map_size: MAP_SIZE
+        };
+        ws.send(JSON.stringify(initData));
+      };
+      
+      setupWebSocketHandlers();
+    }
+
+    function setupWebSocketHandlers() {
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          switch(data.type) {
+            case "map_update":
+              if (data.map) {
+
+                for (let y = 0; y < MAP_SIZE; y++) {
+                  for (let x = 0; x < MAP_SIZE; x++) {
+
+                    const rgbaValue = data.map[y][x];
+
+                    mapData[2][y][x] = (rgbaValue >> 16) & 0xFF;  // R
+                    mapData[1][y][x] = (rgbaValue >> 8) & 0xFF;  // G
+                    mapData[0][y][x] = rgbaValue & 0xFF;   // B
+
+                    //console.log(mapData2[0][0][0], mapData2[1][0][0], mapData2[2][0][0])
+                  }
+                }
+              }
+
+              if (data.action){
+                  sendControl(data.action); 
+              }
+
+              if (data.goal){
+                  targetPoint = null;
+              }
+
+              if (window.drawMap) {
+                window.drawMap();
+              }
+              break;
+          
+            case "log":
+              console.log("Python Log:", data.message);
+              break;
+          }
+        } catch (e) {
+          console.error("Error parsing WebSocket message:", e);
+        }
+      };
+    }
+
+
+
+    function initMap() {
+      const mapCanvas = document.createElement('canvas');
+      mapCanvas.width = posMap.clientWidth;
+      mapCanvas.height = posMap.clientHeight;
+      posMap.appendChild(mapCanvas);
+      
+      const mapCtx = mapCanvas.getContext('2d');
+ 
+      mapCanvas.addEventListener('click', function(event) {
+        const rect = mapCanvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        
+        const width = mapCanvas.width;
+        const height = mapCanvas.height;
+
+        const scale = Math.min(width, height) / MAP_SIZE;
+        
+        const offsetX = (width - MAP_SIZE * scale) / 2;
+        const offsetY = (height - MAP_SIZE * scale) / 2;
+        
+        const mapX = Math.floor((x - offsetX) / scale);
+        const mapY = Math.floor((y - offsetY) / scale);
+        
+        if (mapX >= 0 && mapX < MAP_SIZE && mapY >= 0 && mapY < MAP_SIZE) {
+          targetPoint = {
+            x: mapX,
+            y: mapY
+          };
+
+          const display = document.getElementById('coordinateDisplay');
+          display.textContent = `Clicked at: X=${mapX}, Y=${mapY}`;
+          display.style.position = 'absolute';
+          display.style.backgroundColor = 'white';
+          display.style.padding = '5px';
+          display.style.borderRadius = '3px';
+          display.style.display = 'block';
+          
+          setTimeout(() => { display.style.display = 'none'; }, 3000);
+        }
+      });
+      
+      function drawMap() {
+        const width = mapCanvas.width;
+        const height = mapCanvas.height;
+    
+        mapCtx.fillStyle = '#d3d3d3';
+        mapCtx.fillRect(0, 0, width, height);
+    
+        const scale = Math.min(width, height) / MAP_SIZE;
+        const offsetX = (width - MAP_SIZE * scale) / 2;
+        const offsetY = (height - MAP_SIZE * scale) / 2;
+    
+        const imageData = mapCtx.createImageData(MAP_SIZE, MAP_SIZE);
+
+        for (let y = 0; y < MAP_SIZE; y++) {
+          for (let x = 0; x < MAP_SIZE; x++) {
+            const idx = (y * MAP_SIZE + x) * 4;
+
+            imageData.data[idx] = mapData[0][y][x];     // R
+            imageData.data[idx+1] = mapData[1][y][x];   // G
+            imageData.data[idx+2] = mapData[2][y][x];   // B
+            imageData.data[idx+3] = 255;                // Alpha
+          }
+        }
+
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = MAP_SIZE;
+        tempCanvas.height = MAP_SIZE;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.putImageData(imageData, 0, 0);
+    
+        mapCtx.imageSmoothingEnabled = false;
+        mapCtx.drawImage(
+          tempCanvas, 
+          0, 0, MAP_SIZE, MAP_SIZE, 
+          offsetX, offsetY, MAP_SIZE * scale, MAP_SIZE * scale
+        );
+      }
+      
+      // 保存到全局变量
+      window.mapCtx = mapCtx;
+      window.drawMap = drawMap;
+    }
+
+
+    function simulateRobot() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        if (targetPoint) {
+          const targetData = {
+            type: "target",
+            x: targetPoint.x,
+            y: targetPoint.y
+          };
+          console.log(targetData);
+          ws.send(JSON.stringify(targetData));
+        }
+
+        const robotData = {
+          type: "robot",
+          x: (MapArray[1] || 0) + OFFSET,
+          y: (MapArray[2] || 0) + OFFSET,
+          yaw: MapArray[3] || 0,
+          depth: MapArray[0] || 0,
+          stop: isStop
+        };
+        console.log('updateRobot');
+        ws.send(JSON.stringify(robotData));
+      }
+    }
+
+
+    // -------------------------------------------------------------------
+
+
+
+    // 第二地图相关变量
+    let mapData2 = new Array(3);
+    for (let c = 0; c < 3; c++) {
+      mapData2[c] = new Array(MAP_SIZE);
+      for (let i = 0; i < MAP_SIZE; i++) {
+        mapData2[c][i] = new Array(MAP_SIZE).fill(0);
+      }
+    }
+
+    const cameraFeed = document.getElementById('cameraFeed');
+    const map2Canvas = document.getElementById('map2Canvas');
+    const map2Ctx = map2Canvas.getContext('2d');
+    let controlWs = null;
+
+    // 初始化第二地图
+    function initMap2() {
+      map2Canvas.width = cameraFeed.clientWidth;
+      map2Canvas.height = cameraFeed.clientHeight;
+      
+      // 设置canvas样式使其填满容器
+      map2Canvas.style.width = '100%';
+      map2Canvas.style.height = '100%';
+      map2Canvas.style.display = 'block';
+    }
+
+    // 更新第二地图
+    function updateMap2(data) {
+      if (!data) return;
+
+      const width = map2Canvas.width;
+      const height = map2Canvas.height;
+
+      // 清空画布
+      map2Ctx.clearRect(0, 0, width, height);
+
+      const scale = Math.min(width, height) / MAP_SIZE;
+      const offsetX = (width - MAP_SIZE * scale) / 2;
+      const offsetY = (height - MAP_SIZE * scale) / 2;
+
+      const imageData = map2Ctx.createImageData(MAP_SIZE, MAP_SIZE);
+
+      for (let y = 0; y < MAP_SIZE; y++) {
+        for (let x = 0; x < MAP_SIZE; x++) {
+          const idx = (y * MAP_SIZE + x) * 4;
+
+          imageData.data[idx] = mapData2[0][y][x];     // R
+          imageData.data[idx+1] = mapData2[1][y][x];   // G
+          imageData.data[idx+2] = mapData2[2][y][x];   // B
+          imageData.data[idx+3] = 255;                // Alpha
+        }
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = MAP_SIZE;
+      tempCanvas.height = MAP_SIZE;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.putImageData(imageData, 0, 0);
+  
+      map2Ctx.imageSmoothingEnabled = false;
+      map2Ctx.drawImage(
+        tempCanvas, 
+        0, 0, MAP_SIZE, MAP_SIZE, 
+        offsetX, offsetY, MAP_SIZE * scale, MAP_SIZE * scale
+      );
+    }
+
+    // 连接控制WebSocket
+    function connectControlWebSocket() {
+      controlWs = new WebSocket('ws://localhost:8754');
+      
+      controlWs.onopen = () => {
+          console.log("Control WebSocket connected to Python script");
+      };
+      
+      controlWs.onmessage = (event) => {
+          try {
+              const telemetry = JSON.parse(event.data);
+
+              if (telemetry.map) {
+
+                for (let y = 0; y < MAP_SIZE; y++) {
+                  for (let x = 0; x < MAP_SIZE; x++) {
+
+                    const rgbaValue = telemetry.map[y][x];
+
+                    mapData2[2][y][x] = (rgbaValue >> 16) & 0xFF;  // R
+                    mapData2[1][y][x] = (rgbaValue >> 8) & 0xFF;  // G
+                    mapData2[0][y][x] = rgbaValue & 0xFF;   // B
+
+                    //console.log(mapData2[0][0][0], mapData2[1][0][0], mapData2[2][0][0])
+                  }
+                }
+                
+                updateMap2(telemetry);
+              }
+
+              const d1 = (telemetry.depth / 1000).toFixed(3);
+              const px1 = telemetry.pos_x.toFixed(3);
+              const py1 = telemetry.pos_y.toFixed(3);
+              const a1 = telemetry.yaw.toFixed(2);
+
+              MapArray = [d1, px1, py1, a1];
+
+              document.getElementById("depthValue").textContent = d1 + "m";
+              document.getElementById("pos_x").textContent = px1;
+              document.getElementById("pos_y").textContent = py1;
+              document.getElementById("yaw").textContent = a1;
+          } catch (e) {
+              console.warn("Invalid control telemetry JSON:", e);
+          }
+      };
+      
+      controlWs.onerror = (error) => {
+          console.error("Control WebSocket error:", error);
+      };
+      
+      controlWs.onclose = () => {
+          console.log("Control WebSocket closed");
+      };
+    }
+
+
+
+    // -----------------------------------------------------------------------
+
+
+
+    // 发送控制命令
+    function sendControl(command) {
+      if (controlWs && controlWs.readyState === WebSocket.OPEN) {
+          controlWs.send(JSON.stringify({ command }));
+          console.log("Sent control command:", command);
+          
+          // 更新停止状态
+          if (command === "stop") {
+            isStop = true;
+          } else {
+            isStop = false;
+          }
+      } else {
+          console.warn("Control WebSocket not ready, command not sent:", command);
+      }
+    } 
+
+    // 键盘控制事件
+    document.addEventListener('keydown', e => {
+      switch (e.key.toLowerCase()) {
+        case 'w': sendControl("forward"); break;
+        case 's': sendControl("backward"); break;
+        case 'a': sendControl("left"); break;
+        case 'd': sendControl("right"); break;
+      }
+    });
+    
+    document.addEventListener('keyup', e => {
+      switch (e.key.toLowerCase()) {
+        case 'w':
+        case 's':
+        case 'a':
+        case 'd':
+          sendControl("stop");
+          break;
+      }
+    });
+
+    // 页面加载完成后初始化
+    window.addEventListener('load', () => {
+      connectControlWebSocket();
+      initMap2();
+      connectWebSocket();
+      initMap();
+      setInterval(simulateRobot, 50); // 每50毫秒发送一次机器人数据
+    });
+  </script>
+</body>
+</html>

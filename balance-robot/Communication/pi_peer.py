@@ -4,9 +4,12 @@ import json
 import subprocess
 import traceback
 import serial               # pyserial for ESP32 communication
-import av    
-import time               # PyAV for H.264 decoding
+import av                   # PyAV for H.264 decoding
+import time
 from aiohttp import web
+import adafruit_vl53l0x
+import board
+import busio
 
 from aiortc import (
     RTCPeerConnection,
@@ -18,6 +21,11 @@ from aiortc import (
 from av import VideoFrame   # import from PyAV
 
 control_channel = None
+
+i2c = busio.I2C(3, 2)
+print("I2C initialised")
+sensor = adafruit_vl53l0x.VL53L0X(i2c)
+print("sensor name: ", sensor)
 
 ICE_SERVERS = [
     RTCIceServer(urls=["stun:stun.l.google.com:19302"])
@@ -118,9 +126,16 @@ async def cors_middleware(request, handler):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return resp
 
-# POST /offer
+past_pos_x = 0.0
+past_pos_y = 0.0
+past_pos_y = 0.0
+
+serial_lock = asyncio.Lock()
+
+# POST /offer (no‐trickle ICE)
 async def offer(request):
     try:
+        PiToWeb_task = None
         params     = await request.json()
         peer_id    = params["peer_id"]
         offer_sdp  = params["sdp"]
@@ -137,6 +152,45 @@ async def offer(request):
             print(f"[*] DataChannel created for peer_id={peer_id}: label={channel.label}")
             global control_channel
             control_channel = channel
+
+            async def PiToWeb():
+                while channel.readyState == "open":
+                    d = sensor.range
+                    if esp32_serial.in_waiting:
+                        try:
+
+                            rawdata = esp32_serial.read(esp32_serial.in_waiting)
+
+                            try:
+                                sensor_data = json.loads(rawdata.decode('utf-8').strip())
+                                if not isinstance(sensor_data, dict):
+                                    raise ValueError("Parsed JSON is not a dictionary")
+                            except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as e:
+                                sensor_data = {"x": past_pos_x, "y": past_pos_y, "a": past_yaw}
+
+
+                            past_pos_x = sensor_data.get("x", 0)
+                            past_pos_y = sensor_data.get("y", 0)
+                            past_yaw = sensor_data.get("a", 0)
+                            
+                            telemetry = {
+                                "battery": 100,
+                                "pidP": 0.5,
+                                "pidI": 0.1,
+                                "pidD": 0.2,
+                                "pos_x": sensor_data.get("x", 0),
+                                "pos_y": sensor_data.get("y", 0),
+                                "yaw": sensor_data.get("a", 0),
+                                "depth": d,
+                                "depthTs": time.time() * 1000
+                            }
+                            channel.send(json.dumps(telemetry))
+                        except Exception as e:
+                            print(f"[!] data error: {e}")
+                    
+                    await asyncio.sleep(0.05)
+                    
+            PiToWeb_task = asyncio.create_task(PiToWeb())
 
             @channel.on("message")
             def on_message(message):
@@ -155,7 +209,7 @@ async def offer(request):
                         "ts_server": int(time.time() * 1000)
                     }))
                     return
-
+                
                 try:
                     cmd = json.loads(message)
                 except Exception as e:
@@ -173,18 +227,33 @@ async def offer(request):
                     return
 
                 serial_line = out_char + "\n"
-                try:
-                    if esp32_serial:
-                        esp32_serial.write(serial_line.encode("utf-8"))
-                        print(f"[*] Sent to ESP32: '{out_char}'")
-                    else:
-                        print("[!] ESP32 serial not open; cannot send command")
-                except Exception as e:
-                    print("[!] Failed to write to ESP32 serial:", e)
+
+                async def send_serial_command():
+                    async with serial_lock:
+                        if not esp32_serial:
+                            print("[!] Serial port not open")
+                            return
+                            
+                        try:
+                            esp32_serial.write(f"{out_char}\n".encode())
+                            print(f"[>] Sent to ESP32: {out_char}")
+                        except Exception as e:
+                            print(f"[!] Serial write failed: {e}")
+
+                asyncio.create_task(send_serial_command())
 
             @channel.on("close")
             def on_close():
                 print(f"[*] DataChannel for {peer_id} closed")
+                if PiToWeb_task:
+                    PiToWeb_task.cancel()
+
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            print(f"Connection state is {pc.connectionState}")
+            if pc.connectionState == "failed" or pc.connectionState == "disconnected" or pc.connectionState == "closed":
+                await pc.close()
+                pcs.discard(pc)
 
         # 3) Stub out ICE‐candidate callback (no‐trickle ICE)
         @pc.on("icecandidate")
@@ -223,8 +292,9 @@ async def index(request):
         content_type="text/html"
     )
 
-# Main: open ESP32 serial
+# Main: open ESP32 serial, then start aiohttp server
 async def main():
+
     global esp32_serial
     try:
         esp32_serial = serial.Serial(
