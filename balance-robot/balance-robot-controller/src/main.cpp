@@ -28,6 +28,11 @@ const int STEPPER_INTERVAL_US = 20;
 const float VREF = 4.096;
 const float GRAVITY_ACCELERATION = 9.81f;
 
+const float R1 = 33000.0f;    // 33 kΩ
+const float R2 = 10000.0f;    // 10 kΩ
+const float DIV_RATIO = R2 / (R1 + R2);
+const int VOLTAGE_INTERVAL_MS = 100;
+unsigned long voltageTimer = 0;
 
 float MPU_GYRO_Y_OFFSET = -0.068354f;
 
@@ -306,15 +311,21 @@ void loop() {
     if (millis() >= telemetryTimer) {
         telemetryTimer += TELEMETERY_INTERVAL_MS;
 
-        String telemetry = "{\"a\":";
-        telemetry += yaw_angle;
-        telemetry += ",\"x\":";
-        telemetry += pos_x;
-        telemetry += ",\"y\":";
-        telemetry += pos_y;
-        telemetry += "}";
+        // read battery (as before)
+        uint16_t raw  = readADC(0);
+        float v_adc   = (raw / 4095.0f) * VREF;
+        float vin     = v_adc / DIV_RATIO;
+        float battPct = constrain((vin - 12.0f) / (15.44f - 12.0f) * 100.0f, 0.0f, 100.0f);
+        float pidOut = pid_output;
         
-        Serial.println(telemetry);
+        String packet = "{";
+        packet += "\"battery\":"+ String(battPct,1) + ",";
+        packet += "\"pid\":"+     String(pid_output,2)  + ",";
+        packet += "\"a\":"+       String(yaw_angle,2) + ",";
+        packet += "\"x\":"+       String(pos_x,3)     + ",";
+        packet += "\"y\":"+       String(pos_y,3);
+        packet += "}";
+        Serial.println(packet);
     }
    
     if (millis() >= printTimer) {

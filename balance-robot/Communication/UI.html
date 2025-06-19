@@ -142,15 +142,9 @@
 <body>
   <div id="gameArea">
     <div id="infoPanel">
-      <p>Battery: <span class="value-display" id="battery">92%</span></p>
-      <p>PID → P: <span class="value-display" id="pidP">0.25</span>, 
-         I: <span class="value-display" id="pidI">0.05</span>, 
-         D: <span class="value-display" id="pidD">0.12</span></p>
-      <p>Depth measured: <span class="value-display" id="depthValue">1.25m</span></p>
-      <p>Depth timestamp: <span class="value-display" id="depthTs">__</span></p>
-      <p>pos_x: <span class="value-display" id="pos_x">0</span>, 
-         pos_y: <span class="value-display" id="pos_y">0</span>,
-         yaw: <span class="value-display" id="yaw">0</span> </p>
+      <p>Battery: <span id="battery">–</span></p>
+      <p>PID output: <span id="pidP">–</span></p>
+      <p>Depth measured: <span id="depthValue">–</span></p>
     </div>
 
     <div id="robotSelector">
@@ -263,6 +257,15 @@
         if (msg.type === "pong") {
           const rtt = Date.now() - msg.ts;
           console.log(`Control RTT: ${rtt} ms`);
+          return;
+        }
+          // battery & PID telemetry
+        if (msg.battery !== undefined && msg.pid !== undefined) {
+          document.getElementById("battery").textContent = msg.battery.toFixed(1) + "%";
+          document.getElementById("pidP").textContent    = msg.pid.toFixed(2);
+          if (msg.depth !== undefined) {
+            document.getElementById("depthValue").textContent = msg.depth.toFixed(2) + " m";
+          }
           return;
         }
         if (msg.type === "sync_res") {
@@ -523,13 +526,20 @@ function getLinePixels(x0, y0, x1, y1) {
     }
 
     function simulateRobot() {
-
+      if (sensorData.length === 0) {
+        return;
+      }
+      const data = sensorData[currentDataIndex];
+      if (!data || data.depth === undefined) {
+        return;
+      }
       const depthValue = document.getElementById('depthValue');
+      //console.log(data);
+      depthValue.textContent = `${data.depth.toFixed(2)}m`;
+      mapState.robotAngle = data.orient_y.toFixed(2);
 
-      depthValue.textContent = MapArray[0];
-      mapState.robotPosition.x = 0; // MapArray[1];
-      mapState.robotPosition.y = MapArray[2];
-      mapState.robotAngle  = MapArray[3];
+      mapState.robotPosition.x += data.d_pos_x;
+      mapState.robotPosition.y += data.d_pos_y;
       
       mapState.robotPosition.x = Math.max(mapState.robotRadius, Math.min(mapSize - mapState.robotRadius, mapState.robotPosition.x));
       mapState.robotPosition.y = Math.max(mapState.robotRadius, Math.min(mapSize - mapState.robotRadius, mapState.robotPosition.y));
